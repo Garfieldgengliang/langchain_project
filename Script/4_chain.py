@@ -240,12 +240,114 @@ router_chain = LLMRouterChain.from_llm(llm, router_prompt)
 chain = MultiPromptChain(
     router_chain=router_chain,
     destination_chains=destination_chains,
-    default_chain=default_chain,
+    default_chain=default_chain, # default chain when no destination chain matched
     verbose=True,
 )
 
 print(chain.run("帮我写个脚本，让Windows系统每天0点自动校对时间"))
 
 print(chain.run("帮我写个cron脚本，让系统每天0点自动重启"))
+
+print(chain.run("今天天气不错啊"))
+
+# 调用 OpenAI Function Calling 获得 Pydantic 输出
+from pydantic import BaseModel, Field
+from typing import Optional
+from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
+from langchain.schema import HumanMessage, SystemMessage
+
+from langchain.chains.openai_functions import (
+    create_openai_fn_chain,
+    create_structured_output_chain,
+)
+from langchain.chat_models import ChatOpenAI
+from langchain.llms import OpenAI
+from langchain.prompts import PromptTemplate
+
+
+class Contact(BaseModel):
+    """抽取联系人信息"""
+
+    name: str = Field(..., description="联系人姓名")
+    address: str = Field(..., description="联系人地址")
+    tel: str = Field(None, description="联系人电话")
+
+
+prompt_msgs = [
+    SystemMessage(
+        content="你是信息抄录员。"
+    ),
+    HumanMessage(
+        content="根据给定个数从下面的句子中抽取信息:"
+    ),
+    HumanMessagePromptTemplate.from_template("{input}"),
+    HumanMessage(content="Tips: Make sure to answer in the correct format"),
+]
+prompt = ChatPromptTemplate(messages=prompt_msgs)
+llm = ChatOpenAI(model="gpt-4-0613", temperature=0)
+
+chain = create_openai_fn_chain([Contact], llm, prompt, verbose=True)
+
+chain.run("寄给亮马桥外交办公大楼的王卓然，13012345678")
+
+
+# 基于Document Chain的不同实现思路
+import wordninja
+from langchain.callbacks import StdOutCallbackHandler
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.chat_models import ChatOpenAI
+from langchain.chains import RetrievalQA
+from langchain.chains.base import Chain
+from langchain.document_loaders import PyPDFLoader
+
+# 把整个chain的verbose打开
+def set_verbose_recusively(chain):
+    chain.verbose = True
+    for attr in dir(chain):
+        if attr.endswith('_chain') and isinstance(getattr(chain, attr), Chain):
+            subchain = getattr(chain, attr)
+            set_verbose_recusively(subchain)
+
+
+loader = PyPDFLoader("ftMLDE-2021.pdf")
+documents = loader.load_and_split()
+
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=1200,
+    chunk_overlap=400,
+    length_function=len,
+    add_start_index=True,
+)
+def preprocess(text):
+    def split(line):
+        tokens = re.findall(r'\w+|[.,!?;%$-+=@#*/]', line)
+        return [
+            ' '.join(wordninja.split(token)) if token.isalnum() else token
+            for token in tokens
+        ]
+
+    lines = text.split('\n')
+    for i,line in enumerate(lines):
+        if len(max(line.split(' '), key = len)) >= 20:
+            lines[i] = ' '.join(split(line))
+    return ' '.join(lines)
+
+paragraphs = text_splitter.create_documents(
+    [preprocess(d.page_content) for d in documents[2:20]])
+# print(paragraphs)
+embeddings = OpenAIEmbeddings(model='text-embedding-ada-002')
+db = FAISS.from_documents(paragraphs, embeddings)
+qa_chain = RetrievalQA.from_chain_type(
+    llm=ChatOpenAI(temperature=0),
+    chain_type="stuff", # can be refine, map_reduce, map_rerank
+    retriever=db.as_retriever(),
+    verbose=True
+)
+set_verbose_recusively(qa_chain)
+
+query = "how to build MLDE model?"
+qa_chain.run(query)
 
 
