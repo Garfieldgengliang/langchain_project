@@ -33,10 +33,6 @@ def weekday(date_str: str) -> str:
     d = parser.parse(date_str)
     return calendar.day_name[d.weekday()]
 
-
-from langchain.agents import load_tools
-
-tools = load_tools(["serpapi"])
 tools += [weekday]
 
 # Agent类型一 ReAct
@@ -139,5 +135,5 @@ executor = load_agent_executor(llm, tools, verbose=True)
 agent = PlanAndExecute(planner=planner, executor=executor, verbose=True)
 
 agent.run("写一份关于开源LLM(large language model)的中文简报")
-
+agent.run("写一份关于开源LLM(large language model)的中文简报")
 
