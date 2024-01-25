@@ -17,6 +17,8 @@ _ = load_dotenv(find_dotenv())  # 读取本地 .env 文件，里面定义了 OPE
 openai.api_base = "https://api.fe8.cn/v1"
 openai.api_key = os.getenv('OPENAI_API_KEY')
 
+import transformers
+import torch
 
 #预处理字符全都连在一起的行
 def preprocess(text):
