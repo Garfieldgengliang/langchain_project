@@ -194,6 +194,10 @@ print(response)
 import chromadb
 from chromadb.config import Settings
 
+def get_embeddings(texts, model="text-embedding-ada-002"):
+    '''封装 OpenAI 的 Embedding 模型接口'''
+    data = client.embeddings.create(input=texts, model=model).data
+    return [x.embedding for x in data]
 
 class MyVectorDBConnector:
     def __init__(self, collection_name, embedding_fn):
@@ -222,6 +226,240 @@ class MyVectorDBConnector:
         )
         return results
 
+# 创建一个向量数据库对象
+vector_db = MyVectorDBConnector("demo", get_embeddings)
+# 向向量数据库中添加文档
+vector_db.add_documents(paragraphs)
+
+user_query = "Llama 2有多少参数"
+user_query = "How many parameters does Llama2 have"
+results = vector_db.search(user_query, 2)
+
+for para in results['documents'][0]:
+    print(para+"\n")
+
+class RAG_Bot:
+    def __init__(self, vector_db, llm_api, n_results=2):
+        self.vector_db = vector_db
+        self.llm_api = llm_api
+        self.n_results = n_results
+
+    def chat(self, user_query):
+        # 1. 检索
+        search_results = self.vector_db.search(user_query, self.n_results)
+
+        # 2. 构建 Prompt
+        prompt = build_prompt(
+            prompt_template, info=search_results['documents'][0], query=user_query)
+
+        # 3. 调用 LLM
+        response = self.llm_api(prompt)
+        return response
 
 
+
+# 创建一个RAG机器人
+bot = RAG_Bot(
+    vector_db,
+    llm_api=get_completion
+)
+
+user_query = "llama 2有对话版吗？"
+
+response = bot.chat(user_query)
+
+print(response)
+
+'''
+use different length of split paragraph
+'''
+
+from nltk.tokenize import sent_tokenize
+import json
+
+def split_text(paragraphs, chunk_size=300, overlap_size=100):
+    '''按指定 chunk_size 和 overlap_size 交叠割文本'''
+    sentences = [s.strip() for p in paragraphs for s in sent_tokenize(p)]
+    chunks = []
+    i = 0
+    while i < len(sentences):
+        chunk = sentences[i]
+        overlap = ''
+        prev_len = 0
+        prev = i - 1
+        # 向前计算重叠部分
+        while prev >= 0 and len(sentences[prev])+len(overlap) <= overlap_size:
+            overlap = sentences[prev] + ' ' + overlap
+            prev -= 1
+        chunk = overlap+chunk
+        next = i + 1
+        # 向后计算当前chunk
+        while next < len(sentences) and len(sentences[next])+len(chunk) <= chunk_size:
+            chunk = chunk + ' ' + sentences[next]
+            next += 1
+        chunks.append(chunk)
+        i = next
+    return chunks
+
+chunks = split_text(paragraphs, 300, 100)
+for chunk in chunks:
+    if chunk == '':
+        print('true')
+test_chunks = chunks[:800]
+# 创建一个向量数据库对象
+vector_db = MyVectorDBConnector("demo_text_split", get_embeddings)
+# 向向量数据库中添加文档
+vector_db.add_documents(test_chunks)
+vector_db.add_documents(chunks)
+# 创建一个RAG机器人
+bot = RAG_Bot(
+    vector_db,
+    llm_api=get_completion
+)
+
+
+# user_query = "llama 2可以商用吗？"
+user_query="llama 2 chat有多少参数"
+
+search_results = vector_db.search(user_query, 2)
+for doc in search_results['documents'][0]:
+    print(doc+"\n")
+
+response = bot.chat(user_query)
+print("====回复====")
+print(response)
+
+
+'''
+rank after search query
+'''
+user_query = "how safe is llama 2"
+search_results = vector_db.search(user_query, 5)
+
+for doc in search_results['documents'][0]:
+    print(doc+"\n")
+
+response = bot.chat(user_query)
+print("====回复====")
+print(response)
+
+from sentence_transformers import CrossEncoder
+
+model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
+
+user_query = "how safe is llama 2"
+
+scores = model.predict([(user_query, doc)
+                       for doc in search_results['documents'][0]])
+# 按得分排序
+sorted_list = sorted(
+    zip(scores, search_results['documents'][0]), key=lambda x: x[0], reverse=True)
+for score, doc in sorted_list:
+    print(f"{score}\t{doc}\n")
+
+
+from sentence_transformers import SentenceTransformer
+
+model_name = 'BAAI/bge-large-zh-v1.5' #中文
+#model_name = 'moka-ai/m3e-base' #中英双语，但效果一般
+
+model = SentenceTransformer(model_name)
+
+query = "国际争端"
+#query = "global conflicts"
+
+documents = [
+    "联合国就苏丹达尔富尔地区大规模暴力事件发出警告",
+    "土耳其、芬兰、瑞典与北约代表将继续就瑞典“入约”问题进行谈判",
+    "日本岐阜市陆上自卫队射击场内发生枪击事件 3人受伤",
+    "国家游泳中心（水立方）：恢复游泳、嬉水乐园等水上项目运营",
+    "我国首次在空间站开展舱外辐射生物学暴露实验",
+]
+
+query_vec = model.encode(query)
+
+doc_vecs = [
+    model.encode(doc)
+    for doc in documents
+]
+
+print("Cosine distance:")  # 越大越相似
+#print(cos_sim(query_vec, query_vec))
+import numpy as np
+from numpy import dot
+from numpy.linalg import norm
+
+def cos_sim(a, b):
+    '''余弦距离 -- 越大越相似'''
+    return dot(a, b)/(norm(a)*norm(b))
+
+
+def l2(a, b):
+    '''欧式距离 -- 越小越相似'''
+    x = np.asarray(a)-np.asarray(b)
+    return norm(x)
+
+for vec in doc_vecs:
+    print(cos_sim(query_vec, vec))
+
+
+
+
+'''
+OpenAI implanted the above process
+'''
+from openai import OpenAI # 需要1.2以上版本
+import os
+# 加载环境变量
+from dotenv import load_dotenv, find_dotenv
+_ = load_dotenv(find_dotenv())
+
+client = OpenAI() # openai >= 1.3.0 起，OPENAI_API_KEY 和 OPENAI_BASE_URL 会被默认使用
+
+# 上传文件
+file = client.files.create(
+  file=open("llama2.pdf", "rb"),
+  purpose='assistants'
+)
+
+# 创建 Assistant
+assistant = client.beta.assistants.create(
+  instructions="你是个问答机器人，你根据给定的知识回答用户问题。",
+  model="gpt-4-1106-preview",
+  tools=[{"type": "retrieval"}],
+  file_ids=[file.id]
+)
+
+# 创建 Thread
+thread = client.beta.threads.create()
+
+# 创建 User Message
+message = client.beta.threads.messages.create(
+    thread_id=thread.id,
+    role="user",
+    content="Llama 2有多少参数"
+)
+
+# 创建 Run 实例，同时给 Assistant 提供指令
+run = client.beta.threads.runs.create(
+  thread_id=thread.id,
+  assistant_id=assistant.id,
+  instructions="请用中文回答用户的问题。",
+)
+
+# 等待 Run 完成
+while run.status not in ["cancelled", "failed", "completed", "expired"]:
+    run = client.beta.threads.runs.retrieve(
+      thread_id=thread.id,
+      run_id=run.id
+    )
+
+# 获取 Run 的结果
+messages = client.beta.threads.messages.list(
+  thread_id=thread.id
+)
+
+# 打印结果
+for turn in reversed(messages.data):
+    print(f"{turn.role.upper()}: "+turn.content[0].text.value)
 
